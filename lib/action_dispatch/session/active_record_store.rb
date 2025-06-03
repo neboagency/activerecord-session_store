@@ -62,73 +62,81 @@ module ActionDispatch
 
     private
       def get_session(request, sid)
-        logger.silence do
-          unless sid and session = get_session_with_fallback(sid)
-            # If the sid was nil or if there is no pre-existing session under the sid,
-            # force the generation of a new sid and associate a new session associated with the new sid
-            sid = generate_sid
-            session = session_class.new(:session_id => sid.private_id, :data => {})
+        ActiveRecord::Base.connected_to(role: :writing) do
+          logger.silence do
+            unless sid and session = get_session_with_fallback(sid)
+              # If the sid was nil or if there is no pre-existing session under the sid,
+              # force the generation of a new sid and associate a new session associated with the new sid
+              sid = generate_sid
+              session = session_class.new(:session_id => sid.private_id, :data => {})
+            end
+            request.env[SESSION_RECORD_KEY] = session
+            [sid, session.data]
           end
-          request.env[SESSION_RECORD_KEY] = session
-          [sid, session.data]
         end
       end
 
       def write_session(request, sid, session_data, options)
-        logger.silence do
-          record, sid = get_session_model(request, sid)
-          record.data = session_data
-          return false unless record.save
+        ActiveRecord::Base.connected_to(role: :writing) do
+          logger.silence do
+            record, sid = get_session_model(request, sid)
+            record.data = session_data
+            return false unless record.save
 
-          session_data = record.data
-          if session_data && session_data.respond_to?(:each_value)
-            session_data.each_value do |obj|
-              obj.clear_association_cache if obj.respond_to?(:clear_association_cache)
+            session_data = record.data
+            if session_data && session_data.respond_to?(:each_value)
+              session_data.each_value do |obj|
+                obj.clear_association_cache if obj.respond_to?(:clear_association_cache)
+              end
             end
-          end
 
-          sid
+            sid
+          end
         end
       end
 
       def delete_session(request, session_id, options)
-        logger.silence do
-          if sid = current_session_id(request)
-            if model = get_session_with_fallback(sid)
-              data = model.data
-              model.destroy
+        ActiveRecord::Base.connected_to(role: :writing) do
+          logger.silence do
+            if sid = current_session_id(request)
+              if model = get_session_with_fallback(sid)
+                data = model.data
+                model.destroy
+              end
             end
-          end
 
-          request.env[SESSION_RECORD_KEY] = nil
+            request.env[SESSION_RECORD_KEY] = nil
 
-          unless options[:drop]
-            new_sid = generate_sid
+            unless options[:drop]
+              new_sid = generate_sid
 
-            if options[:renew]
-              new_model = session_class.new(:session_id => new_sid.private_id, :data => data)
-              new_model.save
-              request.env[SESSION_RECORD_KEY] = new_model
+              if options[:renew]
+                new_model = session_class.new(:session_id => new_sid.private_id, :data => data)
+                new_model.save
+                request.env[SESSION_RECORD_KEY] = new_model
+              end
+              new_sid
             end
-            new_sid
           end
         end
       end
 
       def get_session_model(request, id)
-        logger.silence do
-          model = get_session_with_fallback(id)
-          unless model
-            id = generate_sid
-            model = session_class.new(:session_id => id.private_id, :data => {})
-            model.save
+        ActiveRecord::Base.connected_to(role: :writing) do
+          logger.silence do
+            model = get_session_with_fallback(id)
+            unless model
+              id ||= generate_sid
+              model = session_class.new(:session_id => id.private_id, :data => {})
+              model.save
+            end
+            if request.env[ENV_SESSION_OPTIONS_KEY][:id].nil?
+              request.env[SESSION_RECORD_KEY] = model
+            else
+              request.env[SESSION_RECORD_KEY] ||= model
+            end
+            [model, id]
           end
-          if request.env[ENV_SESSION_OPTIONS_KEY][:id].nil?
-            request.env[SESSION_RECORD_KEY] = model
-          else
-            request.env[SESSION_RECORD_KEY] ||= model
-          end
-          [model, id]
         end
       end
 

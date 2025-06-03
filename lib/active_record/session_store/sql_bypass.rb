@@ -60,8 +60,10 @@ module ActiveRecord
 
         # Look up a session by id and deserialize its data if found.
         def find_by_session_id(session_id)
-          if record = connection.select_one("SELECT #{connection.quote_column_name(data_column)} AS data FROM #{@@table_name} WHERE #{connection.quote_column_name(@@session_id_column)}=#{connection.quote(session_id)}")
-            new(:session_id => session_id, :retrieved_by => session_id, :serialized_data => record['data'])
+          ActiveRecord::Base.connected_to(role: :writing) do
+            if record = connection.select_one("SELECT #{connection.quote_column_name(data_column)} AS data FROM #{@@table_name} WHERE #{connection.quote_column_name(@@session_id_column)}=#{connection.quote(session_id)}")
+              new(:session_id => session_id, :retrieved_by => session_id, :serialized_data => record['data'])
+            end
           end
         end
       end
@@ -107,39 +109,43 @@ module ActiveRecord
       end
 
       def save
-        return false unless loaded?
-        serialized_data = self.class.serialize(data)
-        connect        = connection
+        ActiveRecord::Base.connected_to(role: :writing) do
+          return false unless loaded?
+          serialized_data = self.class.serialize(data)
+          connect        = connection
 
-        if @new_record
-          @new_record = false
-          connect.update <<-end_sql, 'Create session'
-            INSERT INTO #{table_name} (
-              #{connect.quote_column_name(session_id_column)},
-              #{connect.quote_column_name(data_column)} )
-            VALUES (
-              #{connect.quote(session_id)},
-              #{connect.quote(serialized_data)} )
-          end_sql
-        else
-          connect.update <<-end_sql, 'Update session'
-            UPDATE #{table_name}
-            SET
-              #{connect.quote_column_name(data_column)}=#{connect.quote(serialized_data)},
-              #{connect.quote_column_name(session_id_column)}=#{connect.quote(@session_id)}
-            WHERE #{connect.quote_column_name(session_id_column)}=#{connect.quote(@retrieved_by)}
-          end_sql
+          if @new_record
+            @new_record = false
+            connect.update <<-end_sql, 'Create session'
+              INSERT INTO #{table_name} (
+                #{connect.quote_column_name(session_id_column)},
+                #{connect.quote_column_name(data_column)} )
+              VALUES (
+                #{connect.quote(session_id)},
+                #{connect.quote(serialized_data)} )
+            end_sql
+          else
+            connect.update <<-end_sql, 'Update session'
+              UPDATE #{table_name}
+              SET
+                #{connect.quote_column_name(data_column)}=#{connect.quote(serialized_data)},
+                #{connect.quote_column_name(session_id_column)}=#{connect.quote(@session_id)}
+              WHERE #{connect.quote_column_name(session_id_column)}=#{connect.quote(@retrieved_by)}
+            end_sql
+          end
         end
       end
 
       def destroy
-        return if @new_record
+        ActiveRecord::Base.connected_to(role: :writing) do
+          return if @new_record
 
-        connect = connection
-        connect.delete <<-end_sql, 'Destroy session'
-          DELETE FROM #{table_name}
-          WHERE #{connect.quote_column_name(session_id_column)}=#{connect.quote(session_id)}
-        end_sql
+          connect = connection
+          connect.delete <<-end_sql, 'Destroy session'
+            DELETE FROM #{table_name}
+            WHERE #{connect.quote_column_name(session_id_column)}=#{connect.quote(session_id)}
+          end_sql
+        end
       end
     end
   end

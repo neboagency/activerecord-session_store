@@ -24,8 +24,10 @@ module ActiveRecord
 
         # Hook to set up sessid compatibility.
         def find_by_session_id(session_id)
-          SEMAPHORE.synchronize { setup_sessid_compatibility! }
-          find_by_session_id(session_id)
+          ActiveRecord::Base.connected_to(role: :writing) do
+            SEMAPHORE.synchronize { setup_sessid_compatibility! }
+            find_by_session_id(session_id)
+          end
         end
 
         private
